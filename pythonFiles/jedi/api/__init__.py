@@ -25,7 +25,7 @@ from jedi.api import interpreter
 from jedi.api import helpers
 from jedi.api.completion import Completion
 from jedi.api.environment import InterpreterEnvironment
-from jedi.api.project import get_default_project
+from jedi.api.project import get_default_project, Project
 from jedi.evaluate import Evaluator
 from jedi.evaluate import imports
 from jedi.evaluate import usages
@@ -83,7 +83,7 @@ class Script(object):
     :type sys_path: Environment
     """
     def __init__(self, source=None, line=None, column=None, path=None,
-                 encoding='utf-8', sys_path=None, environment=None):
+                 encoding='utf-8', sys_path=None, environment=None, workspace=None):
         self._orig_path = path
         # An empty path (also empty string) should always result in no path.
         self.path = os.path.abspath(path) if path else None
@@ -100,9 +100,13 @@ class Script(object):
             sys_path = list(map(force_unicode, sys_path))
 
         # Load the Python grammar of the current interpreter.
-        project = get_default_project(
-            os.path.dirname(self.path)if path else os.getcwd()
-        )
+        if workspace:
+            project = Project(workspace)
+        else:
+            project = get_default_project(
+                os.path.dirname(self.path)if path else os.getcwd()
+            )
+
         # TODO deprecate and remove sys_path from the Script API.
         if sys_path is not None:
             project._sys_path = sys_path

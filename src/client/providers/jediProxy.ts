@@ -701,7 +701,8 @@ export class JediProxy implements Disposable {
             useSnippets: false,
             caseInsensitiveCompletion: true,
             showDescriptions: true,
-            fuzzyMatcher: true
+            fuzzyMatcher: true,
+            workspacePath: this.workspacePath
         };
     }
 

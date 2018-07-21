@@ -5,8 +5,20 @@ import sys
 import json
 import traceback
 import platform
+import time
+import hashlib
+import threading
+import zlib
+try:
+    from queue import Queue
+except ImportError:
+    from Queue import Queue
+
 
 jediPreview = False
+docstringOn = False
+logOn = True
+
 
 class RedirectStdout(object):
     def __init__(self, new_stdout=None):
@@ -46,6 +58,7 @@ class JediCompletion(object):
             # Could add additional test: ((os.path.sep == '/') and os.path.isdir('/mnt/c'))
             # However, this may have more false positives trying to identify Windows/*nix hybrids
             self.drive_mount = ''
+        self.lcache = {}
 
     def _get_definition_type(self, definition):
         # if definition.type not in ['import', 'keyword'] and is_built_in():
@@ -379,12 +392,14 @@ class JediCompletion(object):
                 except Exception:
                     container = ''
 
-                try:
-                    docstring = definition.docstring()
-                    rawdocstring = definition.docstring(raw=True)
-                except Exception:
-                    docstring = ''
-                    rawdocstring = ''
+                docstring = ''
+                rawdocstring = ''
+                if docstringOn:
+                    try:
+                        docstring = definition.docstring()
+                        rawdocstring = definition.docstring(raw=True)
+                    except Exception:
+                        pass
                 _definition = {
                     'text': definition.name,
                     'type': self._get_definition_type(definition),
@@ -426,12 +441,14 @@ class JediCompletion(object):
                     except Exception:
                         container = ''
 
-                    try:
-                        docstring = definition.docstring()
-                        rawdocstring = definition.docstring(raw=True)
-                    except Exception:
-                        docstring = ''
-                        rawdocstring = ''
+                    docstring = ''
+                    rawdocstring = ''
+                    if docstringOn:
+                        try:
+                            docstring = definition.docstring()
+                            rawdocstring = definition.docstring(raw=True)
+                        except Exception:
+                            pass
                     _definition = {
                         'text': definition.name,
                         'type': self._get_definition_type(definition),
@@ -445,8 +462,8 @@ class JediCompletion(object):
                     }
                     _definitions.append(_definition)
             except Exception as e:
-                pass
-        return json.dumps({'id': identifier, 'results': _definitions})
+                llog('Exception', e)
+        return json.dumps(_definitions)
 
     def _serialize_tooltip(self, definitions, identifier=None):
         _definitions = []
@@ -546,28 +563,43 @@ class JediCompletion(object):
     def _process_request(self, request):
         """Accept serialized request from VSCode and write response.
         """
-        request = self._deserialize(request)
-
-        self._set_request_config(request.get('config', {}))
+        config = request.get('config', {})
+        self._set_request_config(config)
 
         self._normalize_request_path(request)
         path = self._get_top_level_module(request.get('path', ''))
         if len(path) > 0 and path not in sys.path:
             sys.path.insert(0, path)
         lookup = request.get('lookup', 'completions')
+        path = request.get('path', '')
 
         if lookup == 'names':
-            return self._serialize_definitions(
-                jedi.api.names(
-                    source=request.get('source', None),
-                    path=request.get('path', ''),
-                    all_scopes=True),
-                request['id'])
+            source = request.get('source', None)
+            path = request.get('path', '')
+
+            m = hashlib.md5()
+            m.update(source and source.encode('utf8') or open(path, 'rb').read())
+            key = m.digest()
+
+            cache = self.lcache.get(path)
+            if cache and cache['key'] == key:
+                result = zlib.decompress(cache['result']).decode('utf8')
+            else:
+                start = time.time()
+                result = self._serialize_definitions(
+                    jedi.api.names(source=source, path=path, all_scopes=True), request['id'])
+                if time.time() - start > 0.05:
+                    self.lcache[path] = {
+                        'key': key,
+                        'result': zlib.compress(result.encode('utf8'))
+                    }
+
+            return '{{"id": {}, "results": {} }}'.format(request['id'], result)
 
         script = jedi.Script(
             source=request.get('source', None), line=request['line'] + 1,
             column=request['column'], path=request.get('path', ''),
-            sys_path=sys.path, environment=self.environment)
+            sys_path=sys.path, environment=self.environment, workspace=config.get('workspacePath'))
 
         if lookup == 'definitions':
             defs = self._get_definitionsx(script.goto_assignments(follow_imports=True), request['id'])
@@ -597,32 +629,89 @@ class JediCompletion(object):
             return self._serialize_usages(
                 script.usages(), request['id'])
         elif lookup == 'methods':
-          return self._serialize_methods(script, request['id'],
-                                      request.get('prefix', ''))
+            return self._serialize_methods(script, request['id'], request.get('prefix', ''))
         else:
-            return self._serialize_completions(script, request['id'],
-                                            request.get('prefix', ''))
+            return self._serialize_completions(script, request['id'], request.get('prefix', ''))
 
     def _write_response(self, response):
         sys.stdout.write(response + '\n')
         sys.stdout.flush()
 
     def watch(self):
+        requests = Queue()
+
+        def reader():
+            while True:
+                try:
+                    rq = self._input.readline()
+                    if len(rq) == 0:
+                        requests.put(None)
+                        return
+                    
+                    rq = self._deserialize(rq)
+                    key = rq.get('lookup', 'completions') + ':' + rq.get('path', '')
+                    for i, r in enumerate(requests.queue):
+                        if r[0] == key:
+                            requests.queue[i] = (key, rq)
+                            llog('queue', len(requests.queue), 'REPLACE', key)
+                            continue
+
+                    requests.put((key, rq))
+                    llog('queue', len(requests.queue), 'ADD', key)
+                except Exception as e:
+                    llog('Exception', e)
+                    llog(traceback.format_exc())
+
+        threading.Thread(target=reader).start()
         while True:
             try:
-                rq = self._input.readline()
-                if len(rq) == 0:
+                rq = requests.get()
+                if rq is None:
                     # Reached EOF - indication our parent process is gone.
                     sys.stderr.write('Received EOF from the standard input,exiting' + '\n')
                     sys.stderr.flush()
                     return
+
                 with RedirectStdout():
-                    response = self._process_request(rq)
+                    start = time.time()
+                    llog('process', rq[0])
+                    response = self._process_request(rq[1])
+                    dur = time.time() - start
+                    llog('{}: {:.2f}s{}'.format(rq[0], dur, ' !!!' if dur > 1 else ''))
+
                 self._write_response(response)
 
-            except Exception:
+            except Exception as e:
+                llog('Exception', e)
+                llog(traceback.format_exc())
                 sys.stderr.write(traceback.format_exc() + '\n')
                 sys.stderr.flush()
+
+
+def llog(*argv):
+    if not logOn:
+        return
+    from datetime import datetime
+
+    def s(s):
+        if isinstance(s, bytes):
+            return s.decode('utf8')
+        elif isinstance(s, str):
+            return s
+        return str(s)
+
+    line = datetime.now().strftime('%H:%M:%S ') + ' '.join(map(s, argv)) + '\n'
+    if len(line) > 1024:
+        line = line[:512] + '...' + line[-512:]
+    open('/tmp/vscode-python.log', 'ab').write(line.encode('utf8'))
+
+
+def clean_llog():
+    if not logOn:
+        return
+    if os.path.isfile('/tmp/vscode-python.log'):
+        open('/tmp/vscode-python.log', 'wb').write('vscode-python-up started 3\n')
+
 
 if __name__ == '__main__':
     cachePrefix = 'v'
@@ -648,4 +737,5 @@ if __name__ == '__main__':
     sys.path.pop(0)
     if len(modulesToLoad) > 0:
         jedi.preload_module(*modulesToLoad.split(','))
+    clean_llog()
     JediCompletion().watch()
