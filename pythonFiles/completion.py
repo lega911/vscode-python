@@ -710,7 +710,7 @@ def clean_llog():
     if not logOn:
         return
     if os.path.isfile('/tmp/vscode-python.log'):
-        open('/tmp/vscode-python.log', 'wb').write('vscode-python-up started 3\n')
+        open('/tmp/vscode-python.log', 'wb').write('vscode-python-up started\n')
 
 
 if __name__ == '__main__':
