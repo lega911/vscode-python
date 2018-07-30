@@ -244,7 +244,8 @@ export class PythonSettings extends EventEmitter implements IPythonSettings {
             addBrackets: false,
             preloadModules: [],
             showAdvancedMembers: false,
-            typeshedPaths: []
+            typeshedPaths: [],
+            sourceRoot: ''
         };
 
         // tslint:disable-next-line:no-backbone-get-set-outside-model no-non-null-assertion

@@ -702,7 +702,8 @@ export class JediProxy implements Disposable {
             caseInsensitiveCompletion: true,
             showDescriptions: true,
             fuzzyMatcher: true,
-            workspacePath: this.workspacePath
+            workspacePath: this.workspacePath,
+            sourceRoot: this.pythonSettings.autoComplete && this.pythonSettings.autoComplete.sourceRoot
         };
     }
 

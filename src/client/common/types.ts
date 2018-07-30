@@ -223,6 +223,7 @@ export interface IAutoCompleteSettings {
     readonly preloadModules: string[];
     readonly showAdvancedMembers: boolean;
     readonly typeshedPaths: string[];
+    readonly sourceRoot: string;
 }
 export interface IWorkspaceSymbolSettings {
     readonly enabled: boolean;

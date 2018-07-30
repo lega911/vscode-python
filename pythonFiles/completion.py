@@ -17,7 +17,7 @@ except ImportError:
 
 jediPreview = False
 docstringOn = False
-logOn = True
+logOn = False
 
 
 class RedirectStdout(object):
@@ -599,7 +599,8 @@ class JediCompletion(object):
         script = jedi.Script(
             source=request.get('source', None), line=request['line'] + 1,
             column=request['column'], path=request.get('path', ''),
-            sys_path=sys.path, environment=self.environment, workspace=config.get('workspacePath'))
+            sys_path=sys.path, environment=self.environment,
+            workspace=config.get('sourceRoot') or config.get('workspacePath'))
 
         if lookup == 'definitions':
             defs = self._get_definitionsx(script.goto_assignments(follow_imports=True), request['id'])
